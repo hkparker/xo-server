@@ -3,7 +3,7 @@
 import {expect} from 'chai'
 import leche from 'leche'
 
-import {productParams} from './job-executor'
+import {mergeObjects} from './job-executor'
 import {_computeCrossProduct} from './job-executor'
 
 describe('productParams', function () {
@@ -31,7 +31,7 @@ describe('productParams', function () {
     ]
   }, function (resultSet, ...sets) {
     it('Assembles all given param sets in on set', function () {
-      expect(productParams(...sets)).to.eql(resultSet)
+      expect(mergeObjects(...sets)).to.eql(resultSet)
     })
   })
 })
@@ -63,7 +63,7 @@ describe('_computeCrossProduct', function () {
     ]
   }, function (product, items, cb) {
     it('Crosses sets of values with a crossProduct callback', function () {
-      expect(_computeCrossProduct(items, cb)).to.have.members(product)
+      expect(_computeCrossProduct(items, { productCb: cb })).to.have.members(product)
     })
   })
 })

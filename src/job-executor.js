@@ -1,10 +1,15 @@
 import assign from 'lodash.assign'
+import filter from 'lodash.filter'
+import pick from 'lodash.pick'
 import {BaseError} from 'make-error'
 
 import {
   createRawObject,
+  ensureArray,
   forEach
 } from './utils'
+
+// ===================================================================
 
 export class JobExecutorError extends BaseError {}
 export class UnsupportedJobType extends JobExecutorError {
@@ -18,29 +23,101 @@ export class UnsupportedVectorType extends JobExecutorError {
   }
 }
 
-export const productParams = (...args) => {
-  let product = createRawObject()
-  assign(product, ...args)
-  return product
+// ===================================================================
+
+const getItems = ({ items, values }) => items || values
+
+const resolveItem = (item, xo, optionsMap) => {
+  const { type } = item
+  const resolve = resolveMap[type]
+
+  if (!resolve) {
+    throw new UnsupportedVectorType(type)
+  }
+
+  return resolveMap[type](getItems(item), optionsMap[type], xo, optionsMap)
 }
 
-export function _computeCrossProduct (items, productCb, extractValueMap = {}) {
-  const upstreamValues = []
-  const itemsCopy = items.slice()
-  const item = itemsCopy.pop()
-  const values = extractValueMap[item.type] && extractValueMap[item.type](item) || item
-  forEach(values, value => {
-    if (itemsCopy.length) {
-      let downstreamValues = _computeCrossProduct(itemsCopy, productCb, extractValueMap)
-      forEach(downstreamValues, downstreamValue => {
-        upstreamValues.push(productCb(value, downstreamValue))
-      })
-    } else {
-      upstreamValues.push(value)
-    }
+// ===================================================================
+
+const defaultProduct = (a, b) => a * b
+
+// items = Array
+export function _computeCrossProduct (items, {
+  productCb = defaultProduct,
+  resolve
+} = {}, xo, optionsMap) {
+  items = items.slice() // Copy.
+
+  const item = items.pop()
+  const values = (resolve && resolve(item, xo, optionsMap)) || item
+
+  if (!items.length) {
+    return values
+  }
+
+  const result = []
+  const subValues = _computeCrossProduct(items, { productCb, resolve }, xo, optionsMap)
+
+  forEach(values, (itemValue) => {
+    forEach(subValues, (subValue) => {
+      result.push(productCb(itemValue, subValue))
+    })
   })
-  return upstreamValues
+
+  return result
 }
+
+// items = Array
+function set (items) {
+  return items.slice() // Copy.
+}
+
+// items = Object: { items, properties }
+function extractProperties (items, options, xo, optionsMap) {
+  const itemsToFilter = ensureArray(getItems(items))
+  const result = []
+
+  forEach(itemsToFilter, (item) => {
+    forEach(ensureArray(resolveItem(item, xo, optionsMap)), (item) => {
+      result.push(pick(
+        item,
+        items.properties
+      ))
+    })
+  })
+
+  return result
+}
+
+// items = Object
+function fetchObjects (items, options, xo) {
+  return filter(xo.getObjects(), items)
+}
+
+export const mergeObjects = (...args) => assign(createRawObject(), ...args)
+
+const resolveMap = {
+  extractProperties,
+  crossProduct: _computeCrossProduct,
+  fetchObjects,
+  set
+}
+
+// ===================================================================
+
+const paramsVectorOptionsMap = {
+  crossProduct: {
+    productCb: mergeObjects,
+    resolve: resolveItem
+  }
+}
+
+const computeParamsVector = (paramsVector, xo, optionsMap = paramsVectorOptionsMap) => {
+  return resolveItem(paramsVector, xo, optionsMap)
+}
+
+// ===================================================================
 
 export default class JobExecutor {
   constructor (xo) {
@@ -86,17 +163,10 @@ export default class JobExecutor {
   }
 
   async _execCall (job, runJobId) {
-    let paramsFlatVector
-
-    if (job.paramsVector) {
-      if (job.paramsVector.type === 'crossProduct') {
-        paramsFlatVector = _computeCrossProduct(job.paramsVector.items, productParams, this._extractValueCb)
-      } else {
-        throw new UnsupportedVectorType(job.paramsVector)
-      }
-    } else {
-      paramsFlatVector = [{}] // One call with no parameters
-    }
+    const { paramsVector } = job
+    const paramsFlatVector = paramsVector
+      ? computeParamsVector(paramsVector, this.xo)
+      : [{}] // One call with no parameters
 
     const connection = this.xo.createUserConnection()
     const promises = []
